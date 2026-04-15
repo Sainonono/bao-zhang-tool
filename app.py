@@ -19,12 +19,9 @@ def parse_menu_text(text):
     unique_items = {i['name']: i for i in items}.values()
     return list(unique_items)
 
-# --- 2. 核心算法：指定种类数量的凑单逻辑 ---
+# --- 2. 核心算法 ---
 def get_best_combo(items, target_amount, max_qty, min_types, avoid_names=None):
-    if avoid_names is None:
-        avoid_names = []
-    
-    # 过滤掉已经被用户锁定的菜（剩下的钱用剩下的菜凑）
+    if avoid_names is None: avoid_names = []
     available_items = [i for i in items if i['name'] not in avoid_names]
     if not available_items: return [], 0
     
@@ -34,13 +31,10 @@ def get_best_combo(items, target_amount, max_qty, min_types, avoid_names=None):
     best_overall_selected = []
     best_overall_sum = 0
 
-    # 尝试多次随机初始化
     for _ in range(15):
         must_have_items = random.sample(available_items, min_types)
         current_sum = sum(int(round(i['price'] * 10)) for i in must_have_items)
-        
-        if current_sum > target_int:
-            continue
+        if current_sum > target_int: continue
             
         remaining_target = target_int - current_sum
         dp = [None] * (remaining_target + 1)
@@ -84,14 +78,16 @@ with col1:
     shop_name = st.text_input("店名", "皮兄烧烤")
     address = st.text_input("用餐地址", "乐山市市中区平贤路")
     dining_time = st.text_input("用餐时间", value=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    people_count = st.number_input("用餐人数", value=4, min_value=1)
-    target_amount = st.number_input("目标报账总额 (元)", value=430.0)
+    
+    # 【修复点 1】强制约束输入框为步长 1 的整数
+    people_count = st.number_input("用餐人数", value=4, min_value=1, step=1)
+    target_amount = st.number_input("目标报账总额 (元)", value=430.0, step=1.0)
     
     st.divider()
     c1, c2, c3 = st.columns(3)
     with c1: max_price_limit = st.number_input("菜品最高限价", value=300)
-    with c2: user_max_qty = st.number_input("单菜数量上限", value=30, min_value=1)
-    with c3: min_types = st.number_input("至少出现菜品种类", value=10, min_value=1, max_value=21)
+    with c2: user_max_qty = st.number_input("单菜数量上限", value=30, min_value=1, step=1)
+    with c3: min_types = st.number_input("至少出现菜品种类", value=10, min_value=1, max_value=21, step=1)
 
 with col2:
     st.subheader("📋 粘贴原始菜单")
@@ -104,7 +100,6 @@ st.subheader("🛠️ 菜单微调工作台")
 col_btn1, col_btn2 = st.columns([1, 4])
 
 with col_btn1:
-    # 第一步：智能初算
     if st.button("🚀 1. 智能初算", type="primary"):
         if not raw_menu:
             st.error("请先粘贴菜单！")
@@ -117,13 +112,12 @@ with col_btn1:
                 counts = Counter([i['name'] for i in selected_raw])
                 price_map = {i['name']: i['price'] for i in selected_raw}
                 
-                # 构建 DataFrame 并存入 Session State
                 df_data = []
                 for name, qty in counts.items():
                     df_data.append({
-                        "锁定": False, # 新增锁定列
+                        "锁定": False, 
                         "菜品名称": name, 
-                        "数量": qty, 
+                        "数量": int(qty), # 强制初始化为整数
                         "单价": price_map[name], 
                         "小计": round(qty * price_map[name], 2)
                     })
@@ -137,25 +131,23 @@ if not st.session_state.menu_df.empty:
     st.success(f"当前总额：{st.session_state.total_sum} 元 | 目标总额：{target_amount} 元")
     st.info("💡 操作指南：在下方表格直接修改【数量】，勾选【锁定】后点击重算。程序会保留锁定的菜品，用剩余金额重新搭配其他菜。")
     
-    # 渲染可编辑表格
+    # 【修复点 2】强制配置表格展示格式：数量不要小数，金额保留两位小数
     edited_df = st.data_editor(
         st.session_state.menu_df,
         column_config={
             "锁定": st.column_config.CheckboxColumn(help="勾选后，重算时该菜品的数量和金额将保持不变"),
             "菜品名称": st.column_config.TextColumn(disabled=True),
-            "单价": st.column_config.NumberColumn(disabled=True),
-            "小计": st.column_config.NumberColumn(disabled=True)
+            "数量": st.column_config.NumberColumn("数量", min_value=0, step=1, format="%d"), 
+            "单价": st.column_config.NumberColumn(disabled=True, format="%.2f"),
+            "小计": st.column_config.NumberColumn(disabled=True, format="%.2f")
         },
         hide_index=True,
         use_container_width=True
     )
 
     with col_btn2:
-        # 第二步：锁定重算
         if st.button("🔄 2. 锁定并重算剩余金额"):
-            # 提取被锁定的菜品
             locked_df = edited_df[edited_df["锁定"] == True].copy()
-            # 重新计算锁定行的小计（防止用户改了数量没改小计）
             locked_df["小计"] = locked_df["数量"] * locked_df["单价"]
             
             locked_sum = locked_df["小计"].sum()
@@ -163,19 +155,17 @@ if not st.session_state.menu_df.empty:
             locked_names = locked_df["菜品名称"].tolist()
             
             if remaining_target < 0:
-                st.error(f"❌ 锁定菜品的总额 ({locked_sum}元) 已经超过了目标总额 ({target_amount}元)！请调小数量。")
+                st.error(f"❌ 锁定菜品的总额 ({locked_sum}元) 已经超过了目标总额！请调小数量。")
             else:
                 all_items = parse_menu_text(raw_menu)
                 filtered_items = [i for i in all_items if i['price'] <= max_price_limit]
                 
-                # 用剩下的钱去跑 DP，并且避开已经锁定的菜
                 new_selected_raw, new_sum = get_best_combo(
                     filtered_items, remaining_target, user_max_qty, 
-                    max(1, min_types - len(locked_df)), # 调整还需满足的最小种类
+                    max(1, min_types - len(locked_df)), 
                     avoid_names=locked_names
                 )
                 
-                # 处理新算出来的菜
                 counts = Counter([i['name'] for i in new_selected_raw])
                 price_map = {i['name']: i['price'] for i in new_selected_raw}
                 new_data = []
@@ -183,24 +173,22 @@ if not st.session_state.menu_df.empty:
                     new_data.append({
                         "锁定": False,
                         "菜品名称": name, 
-                        "数量": qty, 
+                        "数量": int(qty), # 强制为整数
                         "单价": price_map[name], 
                         "小计": round(qty * price_map[name], 2)
                     })
                 new_df = pd.DataFrame(new_data)
                 
-                # 合并锁定数据和新生成的数据
                 final_df = pd.concat([locked_df, new_df], ignore_index=True)
-                
-                # 更新 Session State 并强制刷新页面
                 st.session_state.menu_df = final_df
                 st.session_state.total_sum = round(locked_sum + new_sum, 2)
                 st.rerun()
 
-    # 第三步：生成 Word (使用最新编辑的表格数据)
     st.divider()
     if st.button("🖨️ 3. 确认无误，生成 Word 报账单", type="primary"):
-        # 确保小计是最新的
+        # 【修复点 3】在导出 Word 前，强制把数据格式洗干净
+        edited_df["数量"] = edited_df["数量"].fillna(0).astype(int) # 绝对整数
+        edited_df["单价"] = edited_df["单价"].astype(float)
         edited_df["小计"] = edited_df["数量"] * edited_df["单价"]
         final_total = edited_df["小计"].sum()
         
@@ -208,19 +196,18 @@ if not st.session_state.menu_df.empty:
             doc = DocxTemplate("template.docx")
             context = {
                 'shop_name': shop_name, 'address': address, 'people': people_count,
-                'time': dining_time, 'total': final_total
+                'time': dining_time, 'total': f"{final_total:.2f}" # 保留两位小数
             }
             
-            # 转换为字典列表方便渲染
             records = edited_df.to_dict('records')
             
             for i in range(1, 22):
                 if i <= len(records):
                     item = records[i-1]
                     context[f'n{i}'] = item['菜品名称']
-                    context[f'q{i}'] = item['数量']
-                    context[f'p{i}'] = item['单价']
-                    context[f't{i}'] = item['小计']
+                    context[f'q{i}'] = item['数量'] # 此时绝对是整数 50，不是 50.0
+                    context[f'p{i}'] = f"{item['单价']:.2f}"
+                    context[f't{i}'] = f"{item['小计']:.2f}"
                 else:
                     context[f'n{i}'] = "DELETE_ROW"
                     context[f'q{i}'] = context[f'p{i}'] = context[f't{i}'] = ""
