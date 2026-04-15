@@ -51,15 +51,19 @@ def get_best_combo_bounded(items, target_amount, max_qty_per_item):
 
 # --- 3. Streamlit UI 界面 ---
 st.set_page_config(page_title="金融级凑单工具-最终版", layout="wide")
-st.title("⚖️ 报账菜单自动生成工具 (自适应版)")
+st.title("⚖️ 报账菜单自动生成工具 (全功能版)")
 
 col1, col2 = st.columns([1, 1])
 
 with col1:
     st.subheader("📌 基础信息配置")
     shop_name = st.text_input("店名", "皮兄烧烤")
-    address = st.text_input("地址", "乐山市市中区平贤路") # 补回地址
-    people_count = st.number_input("用餐人数", value=4, min_value=1) # 补回人数
+    address = st.text_input("用餐地址", "乐山市市中区平贤路")
+    
+    # 补回用餐时间输入框，默认显示当前时间
+    dining_time = st.text_input("用餐时间", value=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    
+    people_count = st.number_input("用餐人数", value=4, min_value=1)
     target_amount = st.number_input("目标报账总额 (元)", value=430)
     
     col_a, col_b = st.columns(2)
@@ -70,7 +74,7 @@ with col1:
 
 with col2:
     st.subheader("📋 粘贴原始菜单")
-    raw_menu = st.text_area("请在这里粘贴菜单内容 (支持带价格单位)", height=255)
+    raw_menu = st.text_area("请在这里粘贴菜单内容", height=320)
 
 # --- 4. 运行与 Word 导出逻辑 ---
 if st.button("🚀 开始智能凑单并生成 Word", type="primary"):
@@ -78,11 +82,10 @@ if st.button("🚀 开始智能凑单并生成 Word", type="primary"):
         st.error("❌ 请先粘贴菜单内容！")
     else:
         raw_items = parse_menu_text(raw_menu)
-        # 剔除单价过高的菜
         extracted_items = [item for item in raw_items if item['price'] <= max_price_limit]
         
         if not extracted_items:
-            st.error("❌ 菜单解析后为空，请检查格式或限价。")
+            st.error("❌ 菜单解析后为空，请检查格式或限价设置。")
         else:
             # 自动模式切换：低价菜单自动放宽上限
             highest_price = max([i['price'] for i in extracted_items])
@@ -111,16 +114,16 @@ if st.button("🚀 开始智能凑单并生成 Word", type="primary"):
                 st.success(f"✅ 凑单成功！实测总额：{total_sum} 元")
                 st.table(final_items)
 
-                # --- Word 渲染 (含 21 行固定逻辑与物理删行) ---
+                # --- Word 渲染 (含物理删行) ---
                 try:
                     doc = DocxTemplate("template.docx")
                     
-                    # 补全 context 字典
+                    # 完整的 context 映射
                     context = {
                         'shop_name': shop_name,
                         'address': address,
                         'people': people_count,
-                        'time': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'time': dining_time,  # 确保这里对应到手动输入的 dining_time
                         'total': total_sum
                     }
                     
@@ -139,7 +142,7 @@ if st.button("🚀 开始智能凑单并生成 Word", type="primary"):
 
                     doc.render(context)
                     
-                    # 物理删除 Word 表格中的空行
+                    # 物理删除 Word 表格中的多余空行
                     docx_obj = doc.docx
                     for table in docx_obj.tables:
                         for row in list(table.rows):
@@ -149,10 +152,10 @@ if st.button("🚀 开始智能凑单并生成 Word", type="primary"):
                     bio = io.BytesIO()
                     doc.save(bio)
                     st.download_button(
-                        label="⬇️ 点击下载完美排版的 Word 文档",
+                        label="⬇️ 点击下载生成的报账单",
                         data=bio.getvalue(),
                         file_name=f"{shop_name}_报账单.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     )
                 except Exception as e:
-                    st.error(f"❌ Word 生成失败，报错信息: {e}")
+                    st.error(f"❌ Word 生成失败，底层报错: {e}")
