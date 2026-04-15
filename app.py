@@ -5,7 +5,7 @@ import io
 import datetime
 from collections import Counter
 
-# --- 1. 智能数据清洗 (支持小数如 1.5元) ---
+# --- 1. 智能数据清洗 (支持 1.5元 等小数) ---
 def parse_menu_text(text):
     items = []
     lines = text.strip().split('\n')
@@ -13,9 +13,9 @@ def parse_menu_text(text):
         line = line.strip().replace('\x07', ' ')
         if not line: continue
         
-        # 提取数字（支持浮点数，如 1.5）
+        # 匹配数字（包括 1.5 这种浮点数）
         nums = re.findall(r'\d+\.?\d*', line)
-        # 提取菜名
+        # 提取菜名（过滤掉单价单位）
         name_part = re.sub(r'\d+\.?\d*', '', line).replace('元/串', '').replace('元/份', '').strip()
         
         if name_part and len(nums) >= 1:
@@ -24,11 +24,10 @@ def parse_menu_text(text):
             
     return items
 
-# --- 2. 多重背包凑单算法 (支持数量上限 & 浮点数精度处理) ---
+# --- 2. 核心算法：10倍精度放大 + 多重背包 ---
 def get_best_combo_bounded(items, target_amount, max_qty_per_item):
-    # 将目标金额和单价放大 10 倍（转化为整数运算，完美处理 1.5 元这种单价）
+    # 放大10倍处理 1.5元，转为整数运算防止精度丢失
     target = int(round(target_amount * 10))
-    
     dp = [None] * (target + 1)
     dp[0] = []
     
@@ -36,7 +35,7 @@ def get_best_combo_bounded(items, target_amount, max_qty_per_item):
         price = int(round(item['price'] * 10))
         if price <= 0: continue
         
-        # 限制每道菜最多点 max_qty_per_item 份
+        # 按照设定的上限，尝试重复添加同一菜品
         for _ in range(max_qty_per_item):
             for i in range(target, price - 1, -1):
                 if dp[i - price] is not None:
@@ -44,64 +43,62 @@ def get_best_combo_bounded(items, target_amount, max_qty_per_item):
                     if dp[i] is None or len(new_combo) < len(dp[i]):
                         dp[i] = new_combo
                         
-    # 寻找最接近目标的解
     for i in range(target, -1, -1):
         if dp[i] is not None:
             actual_sum = sum(x['price'] for x in dp[i])
             return dp[i], actual_sum
     return [], 0
 
-# --- 3. Streamlit 界面配置 ---
-st.set_page_config(page_title="烧烤/小吃凑单终极版", layout="wide")
-st.title("🍢 金融级凑单工具 (自适应数量限制版)")
+# --- 3. Streamlit UI 界面 ---
+st.set_page_config(page_title="金融级凑单工具-最终版", layout="wide")
+st.title("⚖️ 报账菜单自动生成工具 (自适应版)")
 
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("📌 基础信息")
+    st.subheader("📌 基础信息配置")
     shop_name = st.text_input("店名", "皮兄烧烤")
-    target_amount = st.number_input("目标金额", value=430)
+    address = st.text_input("地址", "乐山市市中区平贤路") # 补回地址
+    people_count = st.number_input("用餐人数", value=4, min_value=1) # 补回人数
+    target_amount = st.number_input("目标报账总额 (元)", value=430)
     
     col_a, col_b = st.columns(2)
     with col_a:
-        max_price_limit = st.number_input("单道菜最高限价", value=300)
+        max_price_limit = st.number_input("单道菜最高限价 (元)", value=300)
     with col_b:
-        # 这里就是你可以手动调整的数量限制框！
         user_max_qty = st.number_input("单道菜数量上限 (份)", value=10, min_value=1)
 
 with col2:
-    st.subheader("📋 粘贴菜单")
-    raw_menu = st.text_area("请在这里粘贴菜单内容", height=230)
+    st.subheader("📋 粘贴原始菜单")
+    raw_menu = st.text_area("请在这里粘贴菜单内容 (支持带价格单位)", height=255)
 
-# --- 4. 核心逻辑 ---
+# --- 4. 运行与 Word 导出逻辑 ---
 if st.button("🚀 开始智能凑单并生成 Word", type="primary"):
     if not raw_menu:
-        st.error("❌ 请输入菜单内容")
+        st.error("❌ 请先粘贴菜单内容！")
     else:
         raw_items = parse_menu_text(raw_menu)
+        # 剔除单价过高的菜
         extracted_items = [item for item in raw_items if item['price'] <= max_price_limit]
         
         if not extracted_items:
-            st.error("❌ 过滤失败：菜单里没有合格的菜品！")
+            st.error("❌ 菜单解析后为空，请检查格式或限价。")
         else:
-            # 智能检测：如果都是便宜小吃，自动放宽上限，否则使用用户设定的上限
-            highest_menu_price = max([item['price'] for item in extracted_items])
-            if highest_menu_price <= 15:
-                actual_max_qty = 50
-                st.info(f"💡 触发【小吃模式】：菜单最高单价仅 {highest_menu_price} 元，为保证能凑够总额，已临时将上限调至 50 份。")
-            else:
-                actual_max_qty = user_max_qty
+            # 自动模式切换：低价菜单自动放宽上限
+            highest_price = max([i['price'] for i in extracted_items])
+            actual_max_qty = 50 if highest_price <= 15 else user_max_qty
+            if highest_price <= 15:
+                st.info(f"💡 检测到低价菜单（最高{highest_price}元），已自动开启【烧烤模式】，数量上限提升至 50 份。")
                 
-            # 计算组合
+            # 执行计算
             selected_raw, total_sum = get_best_combo_bounded(extracted_items, target_amount, actual_max_qty)
             
             if not selected_raw:
-                st.warning("⚠️ 无法凑出目标金额，请尝试降低金额或提供更多菜品。")
+                st.warning("⚠️ 无法匹配目标金额，请放宽限价或增加菜单菜品。")
             else:
-                # 聚合重复菜品（合并数量和总价）
-                counts = Counter([item['name'] for item in selected_raw])
-                price_map = {item['name']: item['price'] for item in selected_raw}
-                
+                # 聚合处理：合并数量和计算小计
+                counts = Counter([i['name'] for i in selected_raw])
+                price_map = {i['name']: i['price'] for i in selected_raw}
                 final_items = []
                 for name, qty in counts.items():
                     final_items.append({
@@ -111,22 +108,24 @@ if st.button("🚀 开始智能凑单并生成 Word", type="primary"):
                         "subtotal": round(qty * price_map[name], 2)
                     })
 
-                st.success(f"✅ 计算完成！最优组合：{total_sum} 元 (包含 {len(final_items)} 种菜品)")
+                st.success(f"✅ 凑单成功！实测总额：{total_sum} 元")
                 st.table(final_items)
 
-                # --- 渲染 Word ---
+                # --- Word 渲染 (含 21 行固定逻辑与物理删行) ---
                 try:
                     doc = DocxTemplate("template.docx")
                     
+                    # 补全 context 字典
                     context = {
                         'shop_name': shop_name,
-                        'total': total_sum,
-                        'time': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        'address': address,
+                        'people': people_count,
+                        'time': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'total': total_sum
                     }
                     
-                    # 填充 21 行数据
-                    MAX_ROWS = 21 
-                    for i in range(1, MAX_ROWS + 1):
+                    # 填充 21 行固定变量
+                    for i in range(1, 22):
                         if i <= len(final_items):
                             item = final_items[i-1]
                             context[f'n{i}'] = item['name']
@@ -134,16 +133,14 @@ if st.button("🚀 开始智能凑单并生成 Word", type="primary"):
                             context[f'p{i}'] = item['price']
                             context[f't{i}'] = item['subtotal']
                         else:
-                            # 多余的行打上删除标记
+                            # 没填满的行打上删除标记
                             context[f'n{i}'] = "DELETE_ROW"
-                            context[f'q{i}'] = ""
-                            context[f'p{i}'] = ""
-                            context[f't{i}'] = ""
+                            context[f'q{i}'] = context[f'p{i}'] = context[f't{i}'] = ""
 
                     doc.render(context)
                     
-                    # 物理切除带有 DELETE_ROW 标记的行
-                    docx_obj = doc.docx if hasattr(doc, 'docx') else doc 
+                    # 物理删除 Word 表格中的空行
+                    docx_obj = doc.docx
                     for table in docx_obj.tables:
                         for row in list(table.rows):
                             if "DELETE_ROW" in row.cells[0].text:
@@ -152,10 +149,10 @@ if st.button("🚀 开始智能凑单并生成 Word", type="primary"):
                     bio = io.BytesIO()
                     doc.save(bio)
                     st.download_button(
-                        label="⬇️ 点击下载自动排版的报账单",
+                        label="⬇️ 点击下载完美排版的 Word 文档",
                         data=bio.getvalue(),
                         file_name=f"{shop_name}_报账单.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     )
                 except Exception as e:
-                    st.error(f"❌ Word 渲染失败！底层报错: {e}")
+                    st.error(f"❌ Word 生成失败，报错信息: {e}")
