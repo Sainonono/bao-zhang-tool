@@ -29,12 +29,11 @@ def parse_menu_text(text):
     unique_items = {i['name']: i for i in items}.values()
     return list(unique_items)
 
-# --- 2. 核心算法 (增强抗压防死锁版) ---
+# --- 2. 核心算法 ---
 def get_best_combo(items, target_amount, max_qty, min_types):
     if not items: return [], 0
     target_int = int(round(target_amount * 100))
     
-    # 【修复 1：智能降级机制】评估剩余金额最多还能买几种菜
     items_sorted = sorted(items, key=lambda x: x['price'])
     feasible_types = 0
     temp_sum = 0
@@ -45,7 +44,6 @@ def get_best_combo(items, target_amount, max_qty, min_types):
         else:
             break
             
-    # 取你要求的种类数、还能买得起的种类数、菜单剩余种类数的最小值
     actual_min_types = min(min_types, feasible_types, len(items))
     
     best_overall_selected = []
@@ -100,7 +98,7 @@ with col1:
     dining_time = st.text_input("用餐时间", value=st.session_state.default_time)
     
     people_count = st.number_input("用餐人数", value=3, min_value=1, step=1)
-    target_amount = st.number_input("目标报账总额 (元)", value=629.88, step=1.0)
+    target_amount = st.number_input("目标报账总额 (元)", value=454.00, step=1.0)
     
     st.divider()
     c1, c2, c3 = st.columns(3)
@@ -134,9 +132,10 @@ with col2:
 # --- 4. 交互式求解逻辑 ---
 st.divider()
 st.subheader("🛠️ 菜单微调工作台")
-st.info("💡 操作指南：\n1. 表格可以直接修改菜名和单价，或者删掉不要的菜。\n2. 直接勾选【锁定】并点击凑单，程序会自动将数量填为 1 并分配剩余金额。")
+st.info("💡 操作指南：\n1. 直接勾选【锁定】，程序会自动将数量设为 1 并实时更新总额。\n2. 点击智能凑单后，选中的菜品会自动**置顶显示**，方便审阅。")
 
 if not st.session_state.menu_df.empty:
+    # 渲染动态表格
     edited_df = st.data_editor(
         st.session_state.menu_df,
         column_config={
@@ -151,6 +150,18 @@ if not st.session_state.menu_df.empty:
         use_container_width=True
     )
 
+    # =========================================
+    # 【核心交互升级 1：毫秒级自动填 1 并刷新总额】
+    # 只要检测到用户打勾且数量是 0，马上修改数据并强制刷新页面！
+    # =========================================
+    zero_locked_mask = (edited_df["锁定"] == True) & (edited_df["数量"] == 0)
+    if zero_locked_mask.any():
+        edited_df.loc[zero_locked_mask, "数量"] = 1
+        edited_df["小计"] = edited_df["数量"] * edited_df["单价"]
+        st.session_state.menu_df = edited_df
+        st.rerun() # 强制瞬间刷新
+    
+    # 实时计算当前总额
     edited_df["数量"] = edited_df["数量"].fillna(0).astype(int)
     edited_df["单价"] = edited_df["单价"].fillna(0.0).astype(float)
     edited_df["小计"] = edited_df["数量"] * edited_df["单价"]
@@ -162,14 +173,6 @@ if not st.session_state.menu_df.empty:
 
     with col_btn1:
         if st.button("🚀 2. 基于当前表格智能凑单", type="primary"):
-            # 【修复 2：自动将锁定但为 0 的菜改为 1】
-            zero_locked_mask = (edited_df["锁定"] == True) & (edited_df["数量"] == 0)
-            if zero_locked_mask.any():
-                edited_df.loc[zero_locked_mask, "数量"] = 1
-                edited_df["小计"] = edited_df["数量"] * edited_df["单价"]
-                st.toast("✅ 已自动将锁定的空数量设为 1")
-            
-            # 分离锁定和未锁定
             locked_mask = edited_df["锁定"] == True
             locked_df = edited_df[locked_mask].copy()
             unlocked_df = edited_df[~locked_mask].copy()
@@ -199,8 +202,14 @@ if not st.session_state.menu_df.empty:
                     unlocked_df["小计"] = unlocked_df["数量"] * unlocked_df["单价"]
                     final_df = pd.concat([locked_df, unlocked_df], ignore_index=True)
                     
+                    # =========================================
+                    # 【核心交互升级 2：计算完成后，将有数量的菜置顶】
+                    # 按数量降序排，再按锁定排，最后重置索引
+                    # =========================================
+                    final_df = final_df.sort_values(by=["数量", "锁定"], ascending=[False, False]).reset_index(drop=True)
+                    
                     st.session_state.menu_df = final_df
-                    st.rerun()
+                    st.rerun() # 强制瞬间刷新显示结果
 
     with col_btn2:
         if st.button("🖨️ 3. 确认无误，生成 Word 报账单", type="secondary"):
